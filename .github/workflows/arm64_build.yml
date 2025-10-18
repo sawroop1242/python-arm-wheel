@@ -1,0 +1,58 @@
+name: Build Top 50 Python Libraries for ARM64
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write  # Required for creating releases
+
+jobs:
+  build-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU for ARM64
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build all top 50 Python libraries
+        run: |
+          mkdir -p artifacts
+          docker buildx build \
+            --platform linux/arm64 \
+            -t python-arm64-build \
+            -f Dockerfile.arm64 \
+            --output type=local,dest=./artifacts .
+
+          # Build Python wheels for main libraries
+          docker run --rm --platform linux/arm64 \
+            -v $(pwd)/artifacts:/io \
+            python-arm64-build bash -c "
+              pip wheel numpy scipy pandas matplotlib seaborn plotly bokeh altair dash \
+              tensorflow torch tflite-runtime onnxruntime scikit-learn xgboost lightgbm catboost \
+              sympy joblib dask vaex polars statsmodels requests httpx aiohttp flask fastapi \
+              django selenium pyautogui paramiko pillow opencv-python moviepy pydub \
+              pdfplumber openpyxl streamlit PySimpleGUI click typer schedule loguru rich -w /io
+            "
+
+  upload-release:
+    needs: build-arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upload ARM64 Python wheels to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: arm64-build-${{ github.run_number }}
+          name: ARM64 Build #${{ github.run_number }}
+          body: |
+            🚀 Auto-built Top 50 Python libraries for ARM64
+            Includes AI/ML, Data Science, Web, GUI, and Visualization libraries
+          files: |
+            artifacts/**/*.whl
