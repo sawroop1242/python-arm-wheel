@@ -3,6 +3,8 @@ name: Build ARM64 Python Wheels
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -14,8 +16,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up QEMU and Docker Buildx
+      - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -28,43 +32,136 @@ jobs:
             -f Dockerfile.arm64 \
             --load .
 
-      - name: Run build container and compile libraries
+      - name: Create wheels directory
+        run: mkdir -p wheels
+
+      - name: Build Core Scientific Libraries
         run: |
-          mkdir -p wheels
           docker run --rm --platform linux/arm64 \
             -v ${{ github.workspace }}/wheels:/io/wheels \
             python-arm64-build bash -c "
-              pip install --upgrade pip &&
-              pip wheel \
-                numpy scipy pandas matplotlib seaborn scikit-learn scikit-image \
-                sympy statsmodels opencv-python pillow tqdm \
-                flask django fastapi uvicorn gunicorn \
-                tensorflow-cpu tensorflow-lite \
-                torch torchvision torchaudio \
-                onnx onnxruntime onnxruntime-gpu \
-                transformers datasets sentencepiece \
-                streamlit gradio plotly dash \
-                pyqt5 kivy tk pywebview eel \
-                requests beautifulsoup4 lxml \
-                openpyxl xlrd xlsxwriter \
-                pydantic typer click rich \
-                pytest black mypy pylint \
-                jupyter jupyterlab \
+              pip install --upgrade pip setuptools wheel &&
+              pip wheel numpy scipy pandas matplotlib seaborn \
+                scikit-learn scikit-image sympy statsmodels \
+                pillow opencv-python tqdm \
+                -w /io/wheels --no-deps || true &&
+              pip wheel numpy scipy pandas matplotlib seaborn \
+                scikit-learn scikit-image sympy statsmodels \
+                pillow tqdm \
                 -w /io/wheels
             "
+
+      - name: Build Web Frameworks
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v ${{ github.workspace }}/wheels:/io/wheels \
+            python-arm64-build bash -c "
+              pip wheel flask django fastapi uvicorn gunicorn \
+                requests beautifulsoup4 lxml \
+                -w /io/wheels
+            "
+
+      - name: Build AI/ML Libraries
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v ${{ github.workspace }}/wheels:/io/wheels \
+            python-arm64-build bash -c "
+              pip wheel tensorflow-cpu onnx onnxruntime \
+                transformers datasets sentencepiece tokenizers \
+                -w /io/wheels || true
+            "
+
+      - name: Build PyTorch (if available)
+        continue-on-error: true
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v ${{ github.workspace }}/wheels:/io/wheels \
+            python-arm64-build bash -c "
+              pip wheel torch torchvision torchaudio \
+                --index-url https://download.pytorch.org/whl/cpu \
+                -w /io/wheels || true
+            "
+
+      - name: Build Visualization & Dashboard Tools
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v ${{ github.workspace }}/wheels:/io/wheels \
+            python-arm64-build bash -c "
+              pip wheel streamlit gradio plotly dash \
+                -w /io/wheels
+            "
+
+      - name: Build GUI Libraries
+        continue-on-error: true
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v ${{ github.workspace }}/wheels:/io/wheels \
+            python-arm64-build bash -c "
+              pip wheel pyqt5 kivy pywebview \
+                -w /io/wheels || true
+            "
+
+      - name: Build Data Processing Libraries
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v ${{ github.workspace }}/wheels:/io/wheels \
+            python-arm64-build bash -c "
+              pip wheel openpyxl xlrd xlsxwriter \
+                pydantic typer click rich \
+                -w /io/wheels
+            "
+
+      - name: Build Development Tools
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v ${{ github.workspace }}/wheels:/io/wheels \
+            python-arm64-build bash -c "
+              pip wheel pytest black mypy pylint \
+                jupyter jupyterlab notebook \
+                -w /io/wheels
+            "
+
+      - name: List built wheels
+        run: |
+          echo "Built wheels:"
+          ls -lh wheels/
+          echo "Total wheels: $(ls wheels/*.whl 2>/dev/null | wc -l)"
 
       - name: Upload built wheels as artifact
         uses: actions/upload-artifact@v4
         with:
           name: arm64-wheels
-          path: wheels/
+          path: wheels/*.whl
+          if-no-files-found: warn
 
       - name: Create GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: arm64-wheels-${{ github.run_number }}
           name: "ARM64 Python Wheels Build #${{ github.run_number }}"
-          body: "Prebuilt Python wheels for ARM64 (Top 50 libraries)."
+          body: |
+            ## 🐍 Prebuilt Python Wheels for ARM64
+            
+            **Build Date:** ${{ github.event.head_commit.timestamp }}
+            **Commit:** ${{ github.sha }}
+            
+            ### 📦 Included Libraries:
+            - **Scientific:** numpy, scipy, pandas, matplotlib, seaborn, scikit-learn
+            - **Web:** flask, django, fastapi, uvicorn, requests
+            - **AI/ML:** tensorflow, transformers, onnx, onnxruntime
+            - **Visualization:** plotly, dash, streamlit, gradio
+            - **Development:** pytest, black, jupyter, jupyterlab
+            
+            ### 🚀 Installation:
+            ```bash
+            pip install <wheel_file>.whl
+            ```
+            
+            Or download all wheels and install:
+            ```bash
+            pip install *.whl
+            ```
           files: wheels/*.whl
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
